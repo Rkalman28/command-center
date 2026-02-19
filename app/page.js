@@ -39,6 +39,16 @@ export default function CommandCenter() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState({ priority: false, tags: false, projects: false });
 
+  // Calendar state
+  const [activeView, setActiveView] = useState('tasks'); // 'tasks' or 'calendar'
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [calendarEvents, setCalendarEvents] = useState([]);
+  const [calendarList, setCalendarList] = useState([]);
+  const [selectedCalendars, setSelectedCalendars] = useState([]);
+  const [calendarWeekOffset, setCalendarWeekOffset] = useState(0);
+  const [showEventForm, setShowEventForm] = useState(false);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+
   // ── Load data from API on mount ──
   useEffect(() => {
     async function loadData() {
@@ -57,6 +67,97 @@ export default function CommandCenter() {
     }
     loadData();
   }, []);
+
+  // ── Check Google connection & handle auth redirect ──
+  useEffect(() => {
+    async function checkGoogle() {
+      try {
+        // Check for auth callback params
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('auth_success')) {
+          window.history.replaceState({}, '', '/');
+        }
+        if (params.get('auth_error')) {
+          console.error('Auth error:', params.get('auth_error'));
+          window.history.replaceState({}, '', '/');
+        }
+
+        const session = await api('/api/auth/session');
+        setGoogleConnected(session.connected);
+
+        if (session.connected) {
+          // Load calendar list
+          const calData = await api('/api/calendar/calendars');
+          setCalendarList(calData.calendars || []);
+          // Auto-select all calendars
+          setSelectedCalendars((calData.calendars || []).map(c => c.id));
+        }
+      } catch (err) {
+        console.error('Google check failed:', err);
+      }
+    }
+    checkGoogle();
+  }, []);
+
+  // ── Fetch calendar events when view/week/calendars change ──
+  useEffect(() => {
+    if (!googleConnected || selectedCalendars.length === 0 || activeView !== 'calendar') return;
+
+    async function fetchEvents() {
+      setCalendarLoading(true);
+      try {
+        const weekStart = getWeekStart(calendarWeekOffset);
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekEnd.getDate() + 7);
+
+        const params = new URLSearchParams({
+          timeMin: weekStart.toISOString(),
+          timeMax: weekEnd.toISOString(),
+          calendars: selectedCalendars.join(','),
+        });
+
+        const data = await api(`/api/calendar?${params}`);
+        setCalendarEvents(data.events || []);
+      } catch (err) {
+        console.error('Failed to fetch events:', err);
+      } finally {
+        setCalendarLoading(false);
+      }
+    }
+    fetchEvents();
+  }, [googleConnected, selectedCalendars, calendarWeekOffset, activeView]);
+
+  function getWeekStart(offset = 0) {
+    const now = new Date();
+    const day = now.getDay();
+    const start = new Date(now);
+    start.setDate(now.getDate() - day + (offset * 7));
+    start.setHours(0, 0, 0, 0);
+    return start;
+  }
+
+  const createCalendarEvent = async (eventData) => {
+    setSaving(true);
+    try {
+      await api('/api/calendar', { method: 'POST', body: eventData });
+      // Refresh events
+      const weekStart = getWeekStart(calendarWeekOffset);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 7);
+      const params = new URLSearchParams({
+        timeMin: weekStart.toISOString(),
+        timeMax: weekEnd.toISOString(),
+        calendars: selectedCalendars.join(','),
+      });
+      const data = await api(`/api/calendar?${params}`);
+      setCalendarEvents(data.events || []);
+      setShowEventForm(false);
+    } catch (err) {
+      console.error('Failed to create event:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
@@ -395,6 +496,52 @@ export default function CommandCenter() {
           </div>
 
           <div className="border-t border-stone-200 pt-4 space-y-2">
+            {/* View Toggle */}
+            <div className="flex gap-1 mb-3 bg-stone-100 rounded-xl p-1">
+              <button onClick={() => setActiveView('tasks')} className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${activeView === 'tasks' ? 'bg-white text-emerald-700 shadow-sm' : 'text-stone-600 hover:text-stone-800'}`}>
+                Tasks
+              </button>
+              <button onClick={() => setActiveView('calendar')} className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${activeView === 'calendar' ? 'bg-white text-emerald-700 shadow-sm' : 'text-stone-600 hover:text-stone-800'}`}>
+                <span className="flex items-center justify-center gap-1"><Calendar size={14} /> Calendar</span>
+              </button>
+            </div>
+
+            {/* Google Calendar Connection */}
+            {!googleConnected ? (
+              <a href="/api/auth/login" className="w-full text-left px-3 py-2 rounded-xl text-sm hover:bg-stone-100 flex items-center gap-2 text-sky-600 font-medium">
+                <Calendar size={14} />
+                Connect Google Calendar
+              </a>
+            ) : (
+              <div className="text-xs text-emerald-600 px-3 py-1 flex items-center gap-1">
+                <CheckCircle2 size={12} /> Google Calendar connected
+              </div>
+            )}
+
+            {/* Calendar selector */}
+            {googleConnected && calendarList.length > 0 && activeView === 'calendar' && (
+              <div className="space-y-1 pl-1">
+                {calendarList.map(cal => (
+                  <label key={cal.id} className="flex items-center gap-2 text-xs text-stone-600 cursor-pointer px-2 py-1 rounded-lg hover:bg-stone-50">
+                    <input
+                      type="checkbox"
+                      checked={selectedCalendars.includes(cal.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedCalendars([...selectedCalendars, cal.id]);
+                        } else {
+                          setSelectedCalendars(selectedCalendars.filter(id => id !== cal.id));
+                        }
+                      }}
+                      className="rounded accent-emerald-600"
+                    />
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: cal.color }} />
+                    <span className="truncate">{cal.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+
             <button onClick={() => setShowArchived(true)} className="w-full text-left px-3 py-2 rounded-xl text-sm hover:bg-stone-100 flex items-center gap-2 text-amber-600 font-medium">
               <Archive size={14} />
               Archived ({notes.filter(n => n.archived).length})
@@ -486,6 +633,7 @@ export default function CommandCenter() {
 
         {/* Content Grid */}
         <div className="flex-1 overflow-y-auto p-6">
+          {activeView === 'tasks' ? (
           <div className="grid grid-cols-2 gap-6">
             {/* Tasks Column */}
             <div>
@@ -582,6 +730,22 @@ export default function CommandCenter() {
               </div>
             </div>
           </div>
+          ) : (
+            /* Weekly Calendar View */
+            <WeeklyCalendar
+              events={calendarEvents}
+              calendarList={calendarList}
+              selectedCalendars={selectedCalendars}
+              weekOffset={calendarWeekOffset}
+              onPrevWeek={() => setCalendarWeekOffset(calendarWeekOffset - 1)}
+              onNextWeek={() => setCalendarWeekOffset(calendarWeekOffset + 1)}
+              onToday={() => setCalendarWeekOffset(0)}
+              onCreateEvent={() => setShowEventForm(true)}
+              loading={calendarLoading}
+              connected={googleConnected}
+              getWeekStart={getWeekStart}
+            />
+          )}
         </div>
       </div>
 
@@ -591,6 +755,7 @@ export default function CommandCenter() {
       {showDashboard && <Dashboard tasks={tasks} streak={streak} onClose={() => setShowDashboard(false)} />}
       {showWeeklyReport && <WeeklyReport tasks={tasks} notes={notes} onClose={() => setShowWeeklyReport(false)} />}
       {showArchived && <ArchivedItems notes={notes.filter(n => n.archived)} onUnarchive={unarchiveNote} onDelete={deleteNote} onClose={() => setShowArchived(false)} getTagColor={getTagColor} />}
+      {showEventForm && <EventForm calendars={calendarList} onSave={createCalendarEvent} onCancel={() => setShowEventForm(false)} />}
     </div>
   );
 }
@@ -904,6 +1069,237 @@ function ArchivedItems({ notes, onUnarchive, onDelete, onClose, getTagColor }) {
               ))}
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Weekly Calendar View ──
+
+function WeeklyCalendar({ events, calendarList, selectedCalendars, weekOffset, onPrevWeek, onNextWeek, onToday, onCreateEvent, loading, connected, getWeekStart }) {
+  const weekStart = getWeekStart(weekOffset);
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(weekStart);
+    d.setDate(weekStart.getDate() + i);
+    return d;
+  });
+  const hours = Array.from({ length: 16 }, (_, i) => i + 6); // 6 AM to 9 PM
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const getCalendarColor = (calendarId) => {
+    const cal = calendarList.find(c => c.id === calendarId);
+    return cal?.color || '#4285f4';
+  };
+
+  const getEventsForDayHour = (day, hour) => {
+    return events.filter(event => {
+      if (event.allDay) return false;
+      const start = new Date(event.start);
+      return start.getDate() === day.getDate() &&
+        start.getMonth() === day.getMonth() &&
+        start.getFullYear() === day.getFullYear() &&
+        start.getHours() === hour;
+    });
+  };
+
+  const getAllDayEvents = (day) => {
+    return events.filter(event => {
+      if (!event.allDay) return false;
+      const eventDate = new Date(event.start);
+      return eventDate.getDate() === day.getDate() &&
+        eventDate.getMonth() === day.getMonth() &&
+        eventDate.getFullYear() === day.getFullYear();
+    });
+  };
+
+  if (!connected) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20">
+        <Calendar size={48} className="text-stone-300 mb-4" />
+        <h3 className="text-lg font-bold text-stone-700 mb-2">Connect Google Calendar</h3>
+        <p className="text-stone-500 mb-4">Link your Google account to see your calendars here.</p>
+        <a href="/api/auth/login" className="px-6 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-2xl hover:from-emerald-700 hover:to-teal-700 font-medium shadow-sm">
+          Connect Google Calendar
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Calendar Header */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <h2 className="text-xl font-bold text-stone-800">
+            {weekStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+          </h2>
+          {loading && <Loader2 size={16} className="text-emerald-600 animate-spin" />}
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={onPrevWeek} className="p-2 hover:bg-stone-100 rounded-xl"><ChevronLeft size={20} /></button>
+          <button onClick={onToday} className="px-4 py-2 bg-stone-100 hover:bg-stone-200 rounded-xl text-sm font-medium text-stone-700">Today</button>
+          <button onClick={onNextWeek} className="p-2 hover:bg-stone-100 rounded-xl"><ChevronRight size={20} /></button>
+          <button onClick={onCreateEvent} className="ml-2 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-2xl hover:from-emerald-700 hover:to-teal-700 text-sm font-medium flex items-center gap-2">
+            <Plus size={16} /> New Event
+          </button>
+        </div>
+      </div>
+
+      {/* Weekly Grid */}
+      <div className="flex-1 overflow-auto bg-white rounded-2xl border border-stone-200 shadow-sm">
+        <div className="grid grid-cols-8 min-w-[800px]">
+          {/* Day Headers */}
+          <div className="sticky top-0 bg-stone-50 border-b border-r border-stone-200 p-2 z-10" />
+          {days.map((day, i) => {
+            const isToday = day.getTime() === today.getTime();
+            return (
+              <div key={i} className={`sticky top-0 bg-stone-50 border-b border-r border-stone-200 p-2 text-center z-10 ${isToday ? 'bg-emerald-50' : ''}`}>
+                <div className="text-xs text-stone-500 font-medium">{dayNames[day.getDay()]}</div>
+                <div className={`text-lg font-bold ${isToday ? 'text-emerald-600 bg-emerald-100 rounded-full w-8 h-8 flex items-center justify-center mx-auto' : 'text-stone-800'}`}>
+                  {day.getDate()}
+                </div>
+                {/* All-day events */}
+                {getAllDayEvents(day).map(event => (
+                  <div key={event.id} className="text-xs px-1 py-0.5 rounded mt-1 truncate text-white font-medium" style={{ backgroundColor: getCalendarColor(event.calendarId) }}>
+                    {event.title}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+
+          {/* Time Slots */}
+          {hours.map(hour => (
+            <React.Fragment key={hour}>
+              <div className="border-b border-r border-stone-100 p-1 text-xs text-stone-400 text-right pr-2 h-16 flex items-start justify-end pt-1">
+                {hour === 0 ? '12 AM' : hour < 12 ? `${hour} AM` : hour === 12 ? '12 PM' : `${hour - 12} PM`}
+              </div>
+              {days.map((day, dayIdx) => {
+                const dayEvents = getEventsForDayHour(day, hour);
+                const isToday = day.getTime() === today.getTime();
+                return (
+                  <div key={dayIdx} className={`border-b border-r border-stone-100 h-16 relative ${isToday ? 'bg-emerald-50/30' : ''}`}>
+                    {dayEvents.map(event => {
+                      const start = new Date(event.start);
+                      const end = new Date(event.end);
+                      const durationMin = (end - start) / 60000;
+                      const heightPx = Math.max(24, (durationMin / 60) * 64);
+                      const topOffset = (start.getMinutes() / 60) * 64;
+                      return (
+                        <div
+                          key={event.id}
+                          className="absolute left-0.5 right-0.5 rounded-lg px-1.5 py-0.5 text-xs text-white overflow-hidden cursor-pointer hover:opacity-90 shadow-sm"
+                          style={{
+                            backgroundColor: getCalendarColor(event.calendarId),
+                            top: `${topOffset}px`,
+                            height: `${heightPx}px`,
+                            minHeight: '24px',
+                          }}
+                          title={`${event.title}\n${start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} - ${end.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`}
+                        >
+                          <div className="font-medium truncate">{event.title}</div>
+                          <div className="opacity-80 truncate">
+                            {start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Event Form Modal ──
+
+function EventForm({ calendars, onSave, onCancel }) {
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [startTime, setStartTime] = useState('09:00');
+  const [endTime, setEndTime] = useState('10:00');
+  const [allDay, setAllDay] = useState(false);
+  const [calendarId, setCalendarId] = useState(calendars[0]?.id || 'primary');
+  const [location, setLocation] = useState('');
+
+  const handleSave = () => {
+    if (!title.trim()) return;
+
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+    if (allDay) {
+      onSave({ title, description, location, allDay: true, startDate, calendarId, timeZone: tz });
+    } else {
+      const start = new Date(`${startDate}T${startTime}:00`).toISOString();
+      const end = new Date(`${startDate}T${endTime}:00`).toISOString();
+      onSave({ title, description, location, allDay: false, start, end, calendarId, timeZone: tz });
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-bold text-stone-800">New Calendar Event</h2>
+          <button onClick={onCancel} className="text-stone-400 hover:text-stone-600"><X size={24} /></button>
+        </div>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-stone-700 mb-2">Title *</label>
+            <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Event name" className="w-full p-3 border border-stone-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+          {calendars.length > 1 && (
+            <div>
+              <label className="block text-sm font-medium text-stone-700 mb-2">Calendar</label>
+              <select value={calendarId} onChange={(e) => setCalendarId(e.target.value)} className="w-full p-3 border border-stone-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                {calendars.map(cal => (
+                  <option key={cal.id} value={cal.id}>{cal.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-stone-700 mb-2">Date</label>
+            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-full p-3 border border-stone-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+          <div className="flex items-center gap-3">
+            <input type="checkbox" id="allDay" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} className="rounded accent-emerald-600" />
+            <label htmlFor="allDay" className="text-sm text-stone-700">All day</label>
+          </div>
+          {!allDay && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-2">Start Time</label>
+                <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="w-full p-3 border border-stone-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-2">End Time</label>
+                <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="w-full p-3 border border-stone-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              </div>
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-stone-700 mb-2">Location</label>
+            <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Optional" className="w-full p-3 border border-stone-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-stone-700 mb-2">Description</label>
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional" className="w-full h-20 p-3 border border-stone-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none text-sm" />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-6">
+          <button onClick={onCancel} className="px-4 py-2 text-stone-700 hover:bg-stone-100 rounded-2xl font-medium">Cancel</button>
+          <button onClick={handleSave} disabled={!title.trim()} className={`px-4 py-2 rounded-2xl font-medium ${title.trim() ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm' : 'bg-stone-300 text-stone-500 cursor-not-allowed'}`}>
+            Create Event
+          </button>
         </div>
       </div>
     </div>
