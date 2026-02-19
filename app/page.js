@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Plus, Search, Tag, Calendar, CheckCircle2, Circle, Edit2, Trash2, X,
   Bold, Italic, Underline, Strikethrough, List, ChevronLeft, ChevronRight,
-  Folder, Archive, TrendingUp, Flame, FileText, Zap, Download, Loader2
+  Folder, Archive, TrendingUp, Flame, FileText, Zap, Download, Loader2, Clock, StickyNote
 } from 'lucide-react';
 
 // ── API helpers ──
@@ -266,7 +266,7 @@ export default function CommandCenter() {
     }
   };
 
-  // ── Filtering ──
+  // ── Filtering & Sorting ──
 
   const filteredNotes = notes.filter(n => {
     if (n.archived) return false;
@@ -275,6 +275,11 @@ export default function CommandCenter() {
     if (filter.tags.length && !filter.tags.some(tag => (n.tags || []).includes(tag))) return false;
     if (searchQuery && !n.content.toLowerCase().includes(searchQuery.toLowerCase()) && !n.title?.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     return true;
+  }).sort((a, b) => {
+    // Most recently updated/created first
+    const aDate = new Date(a.updatedAt || a.createdAt);
+    const bDate = new Date(b.updatedAt || b.createdAt);
+    return bDate - aDate;
   });
 
   const filteredTasks = tasks.filter(t => {
@@ -286,6 +291,21 @@ export default function CommandCenter() {
     if (filter.tags.length && !filter.tags.some(tag => (t.tags || []).includes(tag))) return false;
     if (searchQuery && !t.text.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     return true;
+  }).sort((a, b) => {
+    // Tasks with due dates first, sorted by earliest due date
+    // Then tasks without due dates, sorted by most recently created
+    if (a.dueDate && b.dueDate) {
+      const dateCompare = new Date(a.dueDate) - new Date(b.dueDate);
+      if (dateCompare !== 0) return dateCompare;
+      // Same date — sort by time if available
+      if (a.dueTime && b.dueTime) return a.dueTime.localeCompare(b.dueTime);
+      if (a.dueTime) return -1;
+      if (b.dueTime) return 1;
+      return 0;
+    }
+    if (a.dueDate) return -1;
+    if (b.dueDate) return 1;
+    return new Date(b.createdAt) - new Date(a.createdAt);
   });
 
   // ── Streak ──
@@ -473,10 +493,20 @@ export default function CommandCenter() {
               <div className="space-y-3">
                 {filteredTasks.map(t => (
                   <div key={t.id} className="bg-white/90 backdrop-blur-sm p-4 rounded-2xl border border-stone-200 hover:shadow-lg transition-all relative shadow-sm">
-                    {t.dueDate && (
-                      <div className="absolute top-3 right-3 flex items-center gap-1 text-xs font-semibold text-stone-700 bg-amber-100 px-3 py-1.5 rounded-full">
-                        <Calendar size={12} />
-                        {new Date(t.dueDate).toLocaleDateString()}
+                    {(t.dueDate || t.dueTime) && (
+                      <div className="absolute top-3 right-3 flex items-center gap-2">
+                        {t.dueDate && (
+                          <span className="flex items-center gap-1 text-xs font-semibold text-stone-700 bg-amber-100 px-3 py-1.5 rounded-full">
+                            <Calendar size={12} />
+                            {new Date(t.dueDate).toLocaleDateString()}
+                          </span>
+                        )}
+                        {t.dueTime && (
+                          <span className="flex items-center gap-1 text-xs font-semibold text-stone-700 bg-sky-100 px-3 py-1.5 rounded-full">
+                            <Clock size={12} />
+                            {t.dueTime}
+                          </span>
+                        )}
                       </div>
                     )}
                     <div className="flex items-start gap-3 pr-24 mb-3">
@@ -485,6 +515,9 @@ export default function CommandCenter() {
                       </button>
                       <div className="flex-1">
                         <p className={`${t.completed ? 'line-through text-stone-500' : 'text-stone-800'} break-words font-medium`}>{t.text}</p>
+                        {t.taskNotes && (
+                          <p className="text-xs text-stone-500 mt-1.5 whitespace-pre-wrap bg-stone-50 p-2 rounded-xl border border-stone-100">{t.taskNotes}</p>
+                        )}
                         {t.parentNoteId && (
                           <button onClick={() => { const n = notes.find(x => x.id === t.parentNoteId); if (n) { setEditingNote(n); setShowNoteForm(true); } }} className="text-xs text-emerald-600 hover:text-emerald-800 mt-1 font-medium">
                             📝 View source note
@@ -635,10 +668,12 @@ function TaskForm({ task, onSave, onCancel }) {
   const [priority, setPriority] = useState(task?.priority || null);
   const [category, setCategory] = useState(task?.category || 'wrapmate');
   const [dueDate, setDueDate] = useState(task?.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : '');
+  const [dueTime, setDueTime] = useState(task?.dueTime || '');
+  const [taskNotes, setTaskNotes] = useState(task?.taskNotes || '');
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl">
+      <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-bold text-stone-800">{task ? 'Edit Task' : 'New Task'}</h2>
           <button onClick={onCancel} className="text-stone-400 hover:text-stone-600"><X size={24} /></button>
@@ -647,10 +682,14 @@ function TaskForm({ task, onSave, onCancel }) {
           <label className="block text-sm font-medium text-stone-700 mb-2">Task *</label>
           <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder="What needs to be done?" className="w-full p-3 border border-stone-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500" />
         </div>
-        <div className="grid grid-cols-2 gap-4 mb-4">
+        <div className="grid grid-cols-3 gap-4 mb-4">
           <div>
             <label className="block text-sm font-medium text-stone-700 mb-2">Due Date</label>
             <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="w-full p-3 border border-stone-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-stone-700 mb-2">Time</label>
+            <input type="time" value={dueTime} onChange={(e) => setDueTime(e.target.value)} className="w-full p-3 border border-stone-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500" />
           </div>
           <div>
             <label className="block text-sm font-medium text-stone-700 mb-2">Category</label>
@@ -662,6 +701,10 @@ function TaskForm({ task, onSave, onCancel }) {
               ))}
             </div>
           </div>
+        </div>
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-stone-700 mb-2">Notes</label>
+          <textarea value={taskNotes} onChange={(e) => setTaskNotes(e.target.value)} placeholder="Add any relevant details, context, or information..." className="w-full h-24 p-3 border border-stone-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none text-sm" />
         </div>
         <div className="mb-4">
           <label className="block text-sm font-medium text-stone-700 mb-2">Tags</label>
@@ -679,7 +722,7 @@ function TaskForm({ task, onSave, onCancel }) {
         </div>
         <div className="flex justify-end gap-2 mt-6">
           <button onClick={onCancel} className="px-4 py-2 text-stone-700 hover:bg-stone-100 rounded-2xl font-medium">Cancel</button>
-          <button onClick={() => onSave({ id: task?.id, text, tags: tags.match(/#(\w+)/g)?.map(t => t.substring(1).toLowerCase()) || [], priority, category, dueDate: dueDate ? new Date(dueDate).toISOString() : null })} disabled={!text.trim()} className={`px-4 py-2 rounded-2xl font-medium ${text.trim() ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm' : 'bg-stone-300 text-stone-500 cursor-not-allowed'}`}>
+          <button onClick={() => onSave({ id: task?.id, text, tags: tags.match(/#(\w+)/g)?.map(t => t.substring(1).toLowerCase()) || [], priority, category, dueDate: dueDate ? new Date(dueDate).toISOString() : null, dueTime: dueTime || null, taskNotes })} disabled={!text.trim()} className={`px-4 py-2 rounded-2xl font-medium ${text.trim() ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm' : 'bg-stone-300 text-stone-500 cursor-not-allowed'}`}>
             Save
           </button>
         </div>
