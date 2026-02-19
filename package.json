@@ -1,0 +1,23 @@
+{
+  "name": "command-center",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "db:setup": "node lib/setup-db.mjs"
+  },
+  "dependencies": {
+    "@vercel/postgres": "^0.10.0",
+    "lucide-react": "^0.263.1",
+    "next": "^14.2.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.3"
+  }
+}
