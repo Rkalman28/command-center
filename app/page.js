@@ -49,6 +49,7 @@ export default function CommandCenter() {
   const [showEventForm, setShowEventForm] = useState(false);
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [connectedAccounts, setConnectedAccounts] = useState([]);
+  const [calendarMode, setCalendarMode] = useState('week'); // 'day', 'week', 'month'
 
   // ── Load data from API on mount ──
   useEffect(() => {
@@ -108,13 +109,11 @@ export default function CommandCenter() {
     async function fetchEvents() {
       setCalendarLoading(true);
       try {
-        const weekStart = getWeekStart(calendarWeekOffset);
-        const weekEnd = new Date(weekStart);
-        weekEnd.setDate(weekEnd.getDate() + 7);
+        const { start, end } = getDateRange(calendarWeekOffset, calendarMode);
 
         const params = new URLSearchParams({
-          timeMin: weekStart.toISOString(),
-          timeMax: weekEnd.toISOString(),
+          timeMin: start.toISOString(),
+          timeMax: end.toISOString(),
           calendars: selectedCalendars.join(','),
         });
 
@@ -127,7 +126,7 @@ export default function CommandCenter() {
       }
     }
     fetchEvents();
-  }, [googleConnected, selectedCalendars, calendarWeekOffset, activeView]);
+  }, [googleConnected, selectedCalendars, calendarWeekOffset, activeView, calendarMode]);
 
   function getWeekStart(offset = 0) {
     const now = new Date();
@@ -138,17 +137,38 @@ export default function CommandCenter() {
     return start;
   }
 
+  function getDateRange(offset, mode) {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    if (mode === 'day') {
+      const start = new Date(now);
+      start.setDate(start.getDate() + offset);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 1);
+      return { start, end };
+    } else if (mode === 'month') {
+      const start = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+      const end = new Date(now.getFullYear(), now.getMonth() + offset + 1, 1);
+      return { start, end };
+    } else {
+      // week
+      const day = now.getDay();
+      const start = new Date(now);
+      start.setDate(now.getDate() - day + (offset * 7));
+      const end = new Date(start);
+      end.setDate(end.getDate() + 7);
+      return { start, end };
+    }
+  }
+
   const createCalendarEvent = async (eventData) => {
     setSaving(true);
     try {
       await api('/api/calendar', { method: 'POST', body: eventData });
-      // Refresh events
-      const weekStart = getWeekStart(calendarWeekOffset);
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekEnd.getDate() + 7);
+      const { start, end } = getDateRange(calendarWeekOffset, calendarMode);
       const params = new URLSearchParams({
-        timeMin: weekStart.toISOString(),
-        timeMax: weekEnd.toISOString(),
+        timeMin: start.toISOString(),
+        timeMax: end.toISOString(),
         calendars: selectedCalendars.join(','),
       });
       const data = await api(`/api/calendar?${params}`);
@@ -745,18 +765,21 @@ export default function CommandCenter() {
             </div>
           </div>
           ) : (
-            /* Weekly Calendar View */
-            <WeeklyCalendar
+            /* Calendar View */
+            <CalendarView
               events={calendarEvents}
               calendarList={calendarList}
               selectedCalendars={selectedCalendars}
-              weekOffset={calendarWeekOffset}
-              onPrevWeek={() => setCalendarWeekOffset(calendarWeekOffset - 1)}
-              onNextWeek={() => setCalendarWeekOffset(calendarWeekOffset + 1)}
+              offset={calendarWeekOffset}
+              mode={calendarMode}
+              onPrev={() => setCalendarWeekOffset(calendarWeekOffset - 1)}
+              onNext={() => setCalendarWeekOffset(calendarWeekOffset + 1)}
               onToday={() => setCalendarWeekOffset(0)}
+              onModeChange={setCalendarMode}
               onCreateEvent={() => setShowEventForm(true)}
               loading={calendarLoading}
               connected={googleConnected}
+              getDateRange={getDateRange}
               getWeekStart={getWeekStart}
             />
           )}
@@ -1089,22 +1112,24 @@ function ArchivedItems({ notes, onUnarchive, onDelete, onClose, getTagColor }) {
   );
 }
 
-// ── Weekly Calendar View ──
+// ── Calendar View (Day / Week / Month) ──
 
-function WeeklyCalendar({ events, calendarList, selectedCalendars, weekOffset, onPrevWeek, onNextWeek, onToday, onCreateEvent, loading, connected, getWeekStart }) {
-  const weekStart = getWeekStart(weekOffset);
-  const days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(weekStart);
-    d.setDate(weekStart.getDate() + i);
-    return d;
-  });
-  const hours = Array.from({ length: 16 }, (_, i) => i + 6); // 6 AM to 9 PM
+function CalendarView({ events, calendarList, selectedCalendars, offset, mode, onPrev, onNext, onToday, onModeChange, onCreateEvent, loading, connected, getDateRange, getWeekStart }) {
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  // Update current time every minute
+  useEffect(() => {
+    const interval = setInterval(() => setCurrentTime(new Date()), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const { start: rangeStart } = getDateRange(offset, mode);
   const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const hours = Array.from({ length: 18 }, (_, i) => i + 5); // 5 AM to 10 PM
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
   const getCalendarColor = (event) => {
-    // Use the color from the event itself (set by the calendar API)
     if (event.color) return event.color;
     const cal = calendarList.find(c => c.id === event.calendarId);
     return cal?.color || '#4285f4';
@@ -1131,6 +1156,31 @@ function WeeklyCalendar({ events, calendarList, selectedCalendars, weekOffset, o
     });
   };
 
+  const getEventsForDay = (day) => {
+    return events.filter(event => {
+      const eventDate = new Date(event.start);
+      return eventDate.getDate() === day.getDate() &&
+        eventDate.getMonth() === day.getMonth() &&
+        eventDate.getFullYear() === day.getFullYear();
+    });
+  };
+
+  const isToday = (day) => day.getTime() === today.getTime();
+
+  // Current time line position
+  const getCurrentTimePosition = () => {
+    const now = currentTime;
+    const hour = now.getHours();
+    const minutes = now.getMinutes();
+    if (hour < 5 || hour > 22) return null; // outside visible range
+    const topPx = ((hour - 5) * 64) + ((minutes / 60) * 64);
+    return topPx;
+  };
+
+  const isTodayVisible = (days) => {
+    return days.some(d => isToday(d));
+  };
+
   if (!connected) {
     return (
       <div className="flex flex-col items-center justify-center py-20">
@@ -1144,40 +1194,107 @@ function WeeklyCalendar({ events, calendarList, selectedCalendars, weekOffset, o
     );
   }
 
-  return (
-    <div className="flex flex-col h-full">
-      {/* Calendar Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xl font-bold text-stone-800">
-            {weekStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-          </h2>
-          {loading && <Loader2 size={16} className="text-emerald-600 animate-spin" />}
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={onPrevWeek} className="p-2 hover:bg-stone-100 rounded-xl"><ChevronLeft size={20} /></button>
-          <button onClick={onToday} className="px-4 py-2 bg-stone-100 hover:bg-stone-200 rounded-xl text-sm font-medium text-stone-700">Today</button>
-          <button onClick={onNextWeek} className="p-2 hover:bg-stone-100 rounded-xl"><ChevronRight size={20} /></button>
-          <button onClick={onCreateEvent} className="ml-2 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-2xl hover:from-emerald-700 hover:to-teal-700 text-sm font-medium flex items-center gap-2">
-            <Plus size={16} /> New Event
-          </button>
+  // Header with title based on mode
+  const getHeaderTitle = () => {
+    if (mode === 'day') {
+      const d = new Date(today);
+      d.setDate(d.getDate() + offset);
+      return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+    } else if (mode === 'month') {
+      const d = new Date(today.getFullYear(), today.getMonth() + offset, 1);
+      return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    } else {
+      return rangeStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    }
+  };
+
+  // ── MONTH VIEW ──
+  if (mode === 'month') {
+    const monthStart = new Date(today.getFullYear(), today.getMonth() + offset, 1);
+    const monthEnd = new Date(today.getFullYear(), today.getMonth() + offset + 1, 0);
+    const startDay = monthStart.getDay();
+    const totalDays = monthEnd.getDate();
+
+    const weeks = [];
+    let currentWeek = [];
+    // Fill leading empty days
+    for (let i = 0; i < startDay; i++) {
+      const d = new Date(monthStart);
+      d.setDate(d.getDate() - (startDay - i));
+      currentWeek.push({ date: d, inMonth: false });
+    }
+    for (let d = 1; d <= totalDays; d++) {
+      currentWeek.push({ date: new Date(monthStart.getFullYear(), monthStart.getMonth(), d), inMonth: true });
+      if (currentWeek.length === 7) { weeks.push(currentWeek); currentWeek = []; }
+    }
+    // Fill trailing days
+    if (currentWeek.length > 0) {
+      let nextDay = 1;
+      while (currentWeek.length < 7) {
+        currentWeek.push({ date: new Date(monthEnd.getFullYear(), monthEnd.getMonth() + 1, nextDay++), inMonth: false });
+      }
+      weeks.push(currentWeek);
+    }
+
+    return (
+      <div className="flex flex-col h-full">
+        <CalendarHeader title={getHeaderTitle()} onPrev={onPrev} onNext={onNext} onToday={onToday} onCreateEvent={onCreateEvent} mode={mode} onModeChange={onModeChange} loading={loading} />
+        <div className="flex-1 overflow-auto bg-white rounded-2xl border border-stone-200 shadow-sm">
+          <div className="grid grid-cols-7">
+            {dayNames.map(d => (
+              <div key={d} className="text-center text-xs font-medium text-stone-500 py-2 border-b border-stone-200 bg-stone-50">{d}</div>
+            ))}
+            {weeks.map((week, wi) => (
+              week.map((cell, di) => {
+                const dayEvents = getEventsForDay(cell.date);
+                const isTodayCell = isToday(cell.date);
+                return (
+                  <div key={`${wi}-${di}`} className={`min-h-24 border-b border-r border-stone-100 p-1 ${!cell.inMonth ? 'bg-stone-50/50' : ''} ${isTodayCell ? 'bg-emerald-50/50' : ''}`}>
+                    <div className={`text-xs font-medium mb-1 ${isTodayCell ? 'text-emerald-600 bg-emerald-100 rounded-full w-6 h-6 flex items-center justify-center' : cell.inMonth ? 'text-stone-700' : 'text-stone-400'}`}>
+                      {cell.date.getDate()}
+                    </div>
+                    <div className="space-y-0.5">
+                      {dayEvents.slice(0, 3).map(event => (
+                        <div key={event.id} className="text-xs px-1 py-0.5 rounded truncate text-white font-medium" style={{ backgroundColor: getCalendarColor(event) }} title={`${event.title} ${event.allDay ? '' : new Date(event.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`}>
+                          {event.title}
+                        </div>
+                      ))}
+                      {dayEvents.length > 3 && <div className="text-xs text-stone-500 px-1">+{dayEvents.length - 3} more</div>}
+                    </div>
+                  </div>
+                );
+              })
+            ))}
+          </div>
         </div>
       </div>
+    );
+  }
 
-      {/* Weekly Grid */}
+  // ── DAY & WEEK VIEW ──
+  const days = mode === 'day'
+    ? [(() => { const d = new Date(today); d.setDate(d.getDate() + offset); return d; })()]
+    : Array.from({ length: 7 }, (_, i) => { const d = new Date(rangeStart); d.setDate(rangeStart.getDate() + i); return d; });
+
+  const gridCols = mode === 'day' ? 'grid-cols-2' : 'grid-cols-8';
+  const timePos = getCurrentTimePosition();
+  const showTimeLine = isTodayVisible(days);
+
+  return (
+    <div className="flex flex-col h-full">
+      <CalendarHeader title={getHeaderTitle()} onPrev={onPrev} onNext={onNext} onToday={onToday} onCreateEvent={onCreateEvent} mode={mode} onModeChange={onModeChange} loading={loading} />
       <div className="flex-1 overflow-auto bg-white rounded-2xl border border-stone-200 shadow-sm">
-        <div className="grid grid-cols-8 min-w-[800px]">
+        <div className={`grid ${gridCols} min-w-[400px]`}>
           {/* Day Headers */}
           <div className="sticky top-0 bg-stone-50 border-b border-r border-stone-200 p-2 z-10" />
           {days.map((day, i) => {
-            const isToday = day.getTime() === today.getTime();
+            const todayDay = isToday(day);
             return (
-              <div key={i} className={`sticky top-0 bg-stone-50 border-b border-r border-stone-200 p-2 text-center z-10 ${isToday ? 'bg-emerald-50' : ''}`}>
+              <div key={i} className={`sticky top-0 bg-stone-50 border-b border-r border-stone-200 p-2 text-center z-10 ${todayDay ? 'bg-emerald-50' : ''}`}>
                 <div className="text-xs text-stone-500 font-medium">{dayNames[day.getDay()]}</div>
-                <div className={`text-lg font-bold ${isToday ? 'text-emerald-600 bg-emerald-100 rounded-full w-8 h-8 flex items-center justify-center mx-auto' : 'text-stone-800'}`}>
+                <div className={`text-lg font-bold ${todayDay ? 'text-emerald-600 bg-emerald-100 rounded-full w-8 h-8 flex items-center justify-center mx-auto' : 'text-stone-800'}`}>
                   {day.getDate()}
                 </div>
-                {/* All-day events */}
                 {getAllDayEvents(day).map(event => (
                   <div key={event.id} className="text-xs px-1 py-0.5 rounded mt-1 truncate text-white font-medium" style={{ backgroundColor: getCalendarColor(event) }}>
                     {event.title}
@@ -1195,9 +1312,16 @@ function WeeklyCalendar({ events, calendarList, selectedCalendars, weekOffset, o
               </div>
               {days.map((day, dayIdx) => {
                 const dayEvents = getEventsForDayHour(day, hour);
-                const isToday = day.getTime() === today.getTime();
+                const todayDay = isToday(day);
                 return (
-                  <div key={dayIdx} className={`border-b border-r border-stone-100 h-16 relative ${isToday ? 'bg-emerald-50/30' : ''}`}>
+                  <div key={dayIdx} className={`border-b border-r border-stone-100 h-16 relative ${todayDay ? 'bg-emerald-50/30' : ''}`}>
+                    {/* Current time line */}
+                    {showTimeLine && todayDay && timePos !== null && hour === currentTime.getHours() && (
+                      <div className="absolute left-0 right-0 z-20 flex items-center" style={{ top: `${(currentTime.getMinutes() / 60) * 64}px` }}>
+                        <div className="w-2 h-2 rounded-full bg-rose-500 -ml-1" />
+                        <div className="flex-1 h-0.5 bg-rose-500" />
+                      </div>
+                    )}
                     {dayEvents.map(event => {
                       const start = new Date(event.start);
                       const end = new Date(event.end);
@@ -1229,6 +1353,36 @@ function WeeklyCalendar({ events, calendarList, selectedCalendars, weekOffset, o
             </React.Fragment>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Calendar Header ──
+function CalendarHeader({ title, onPrev, onNext, onToday, onCreateEvent, mode, onModeChange, loading }) {
+  return (
+    <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center gap-3">
+        <h2 className="text-xl font-bold text-stone-800">{title}</h2>
+        {loading && <Loader2 size={16} className="text-emerald-600 animate-spin" />}
+      </div>
+      <div className="flex items-center gap-2">
+        <button onClick={onPrev} className="p-2 hover:bg-stone-100 rounded-xl"><ChevronLeft size={20} /></button>
+        <button onClick={onToday} className="px-4 py-2 bg-stone-100 hover:bg-stone-200 rounded-xl text-sm font-medium text-stone-700">Today</button>
+        <button onClick={onNext} className="p-2 hover:bg-stone-100 rounded-xl"><ChevronRight size={20} /></button>
+
+        {/* Mode Toggle */}
+        <div className="flex gap-0.5 bg-stone-100 rounded-xl p-0.5 ml-2">
+          {['day', 'week', 'month'].map(m => (
+            <button key={m} onClick={() => onModeChange(m)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${mode === m ? 'bg-white text-emerald-700 shadow-sm' : 'text-stone-600 hover:text-stone-800'}`}>
+              {m.charAt(0).toUpperCase() + m.slice(1)}
+            </button>
+          ))}
+        </div>
+
+        <button onClick={onCreateEvent} className="ml-2 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-2xl hover:from-emerald-700 hover:to-teal-700 text-sm font-medium flex items-center gap-2">
+          <Plus size={16} /> New Event
+        </button>
       </div>
     </div>
   );
