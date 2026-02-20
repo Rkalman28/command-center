@@ -55,8 +55,7 @@ export async function GET(request) {
             calendarId: cal.id,
             calendarName: cal.summary,
             accountEmail,
-           
-title: event.summary || '',
+            title: event.summary,
             description: event.description || '',
             start: event.start?.dateTime || event.start?.date,
             end: event.end?.dateTime || event.end?.date,
