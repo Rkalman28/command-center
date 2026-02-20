@@ -1116,6 +1116,8 @@ function ArchivedItems({ notes, onUnarchive, onDelete, onClose, getTagColor }) {
 
 function CalendarView({ events, calendarList, selectedCalendars, offset, mode, onPrev, onNext, onToday, onModeChange, onCreateEvent, loading, connected, getDateRange, getWeekStart }) {
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [rowHeight, setRowHeight] = useState(48); // px per hour slot, default 48
+  const [timeColWidth, setTimeColWidth] = useState(50); // px for time column, default 50
 
   // Update current time every minute
   useEffect(() => {
@@ -1172,8 +1174,8 @@ function CalendarView({ events, calendarList, selectedCalendars, offset, mode, o
     const now = currentTime;
     const hour = now.getHours();
     const minutes = now.getMinutes();
-    if (hour < 5 || hour > 22) return null; // outside visible range
-    const topPx = ((hour - 5) * 64) + ((minutes / 60) * 64);
+    if (hour < 5 || hour > 22) return null;
+    const topPx = ((hour - 5) * rowHeight) + ((minutes / 60) * rowHeight);
     return topPx;
   };
 
@@ -1238,7 +1240,7 @@ function CalendarView({ events, calendarList, selectedCalendars, offset, mode, o
 
     return (
       <div className="flex flex-col h-full">
-        <CalendarHeader title={getHeaderTitle()} onPrev={onPrev} onNext={onNext} onToday={onToday} onCreateEvent={onCreateEvent} mode={mode} onModeChange={onModeChange} loading={loading} />
+        <CalendarHeader title={getHeaderTitle()} onPrev={onPrev} onNext={onNext} onToday={onToday} onCreateEvent={onCreateEvent} mode={mode} onModeChange={onModeChange} loading={loading} rowHeight={rowHeight} onRowHeightChange={setRowHeight} timeColWidth={timeColWidth} onTimeColWidthChange={setTimeColWidth} />
         <div className="flex-1 overflow-auto bg-white rounded-2xl border border-stone-200 shadow-sm">
           <div className="grid grid-cols-7">
             {dayNames.map(d => (
@@ -1276,17 +1278,16 @@ function CalendarView({ events, calendarList, selectedCalendars, offset, mode, o
     ? [(() => { const d = new Date(today); d.setDate(d.getDate() + offset); return d; })()]
     : Array.from({ length: 7 }, (_, i) => { const d = new Date(rangeStart); d.setDate(rangeStart.getDate() + i); return d; });
 
-  const gridCols = mode === 'day' ? 'grid-cols-2' : 'grid-cols-8';
   const timePos = getCurrentTimePosition();
   const showTimeLine = isTodayVisible(days);
 
   return (
     <div className="flex flex-col h-full">
-      <CalendarHeader title={getHeaderTitle()} onPrev={onPrev} onNext={onNext} onToday={onToday} onCreateEvent={onCreateEvent} mode={mode} onModeChange={onModeChange} loading={loading} />
+      <CalendarHeader title={getHeaderTitle()} onPrev={onPrev} onNext={onNext} onToday={onToday} onCreateEvent={onCreateEvent} mode={mode} onModeChange={onModeChange} loading={loading} rowHeight={rowHeight} onRowHeightChange={setRowHeight} timeColWidth={timeColWidth} onTimeColWidthChange={setTimeColWidth} />
       <div className="flex-1 overflow-auto bg-white rounded-2xl border border-stone-200 shadow-sm">
-        <div className={`grid ${gridCols} min-w-[400px]`}>
+        <div className="grid" style={{ gridTemplateColumns: `${timeColWidth}px repeat(${days.length}, 1fr)` }}>
           {/* Day Headers */}
-          <div className="sticky top-0 bg-stone-50 border-b border-r border-stone-200 p-2 z-10" />
+          <div className="sticky top-0 bg-stone-50 border-b border-r border-stone-200 p-2 z-10" style={{ width: `${timeColWidth}px`, minWidth: `${timeColWidth}px` }} />
           {days.map((day, i) => {
             const todayDay = isToday(day);
             return (
@@ -1307,17 +1308,17 @@ function CalendarView({ events, calendarList, selectedCalendars, offset, mode, o
           {/* Time Slots */}
           {hours.map(hour => (
             <React.Fragment key={hour}>
-              <div className="border-b border-r border-stone-100 p-1 text-xs text-stone-400 text-right pr-2 h-16 flex items-start justify-end pt-1">
+              <div className="border-b border-r border-stone-100 p-1 text-xs text-stone-400 text-right pr-2 flex items-start justify-end pt-1" style={{ height: `${rowHeight}px`, width: `${timeColWidth}px`, minWidth: `${timeColWidth}px` }}>
                 {hour === 0 ? '12 AM' : hour < 12 ? `${hour} AM` : hour === 12 ? '12 PM' : `${hour - 12} PM`}
               </div>
               {days.map((day, dayIdx) => {
                 const dayEvents = getEventsForDayHour(day, hour);
                 const todayDay = isToday(day);
                 return (
-                  <div key={dayIdx} className={`border-b border-r border-stone-100 h-16 relative ${todayDay ? 'bg-emerald-50/30' : ''}`}>
+                  <div key={dayIdx} className={`border-b border-r border-stone-100 relative ${todayDay ? 'bg-emerald-50/30' : ''}`} style={{ height: `${rowHeight}px` }}>
                     {/* Current time line */}
                     {showTimeLine && todayDay && timePos !== null && hour === currentTime.getHours() && (
-                      <div className="absolute left-0 right-0 z-20 flex items-center" style={{ top: `${(currentTime.getMinutes() / 60) * 64}px` }}>
+                      <div className="absolute left-0 right-0 z-20 flex items-center" style={{ top: `${(currentTime.getMinutes() / 60) * rowHeight}px` }}>
                         <div className="w-2 h-2 rounded-full bg-rose-500 -ml-1" />
                         <div className="flex-1 h-0.5 bg-rose-500" />
                       </div>
@@ -1326,8 +1327,8 @@ function CalendarView({ events, calendarList, selectedCalendars, offset, mode, o
                       const start = new Date(event.start);
                       const end = new Date(event.end);
                       const durationMin = (end - start) / 60000;
-                      const heightPx = Math.max(24, (durationMin / 60) * 64);
-                      const topOffset = (start.getMinutes() / 60) * 64;
+                      const heightPx = Math.max(20, (durationMin / 60) * rowHeight);
+                      const topOffset = (start.getMinutes() / 60) * rowHeight;
                       return (
                         <div
                           key={event.id}
@@ -1359,14 +1360,14 @@ function CalendarView({ events, calendarList, selectedCalendars, offset, mode, o
 }
 
 // ── Calendar Header ──
-function CalendarHeader({ title, onPrev, onNext, onToday, onCreateEvent, mode, onModeChange, loading }) {
+function CalendarHeader({ title, onPrev, onNext, onToday, onCreateEvent, mode, onModeChange, loading, rowHeight, onRowHeightChange, timeColWidth, onTimeColWidthChange }) {
   return (
-    <div className="flex items-center justify-between mb-4">
+    <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
       <div className="flex items-center gap-3">
         <h2 className="text-xl font-bold text-stone-800">{title}</h2>
         {loading && <Loader2 size={16} className="text-emerald-600 animate-spin" />}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <button onClick={onPrev} className="p-2 hover:bg-stone-100 rounded-xl"><ChevronLeft size={20} /></button>
         <button onClick={onToday} className="px-4 py-2 bg-stone-100 hover:bg-stone-200 rounded-xl text-sm font-medium text-stone-700">Today</button>
         <button onClick={onNext} className="p-2 hover:bg-stone-100 rounded-xl"><ChevronRight size={20} /></button>
@@ -1379,6 +1380,15 @@ function CalendarHeader({ title, onPrev, onNext, onToday, onCreateEvent, mode, o
             </button>
           ))}
         </div>
+
+        {/* Zoom control */}
+        {mode !== 'month' && (
+          <div className="flex items-center gap-1 ml-2 bg-stone-100 rounded-xl px-2 py-1">
+            <span className="text-xs text-stone-500">Zoom</span>
+            <button onClick={() => onRowHeightChange(Math.max(24, rowHeight - 8))} className="p-1 hover:bg-stone-200 rounded text-stone-600 text-xs font-bold">−</button>
+            <button onClick={() => onRowHeightChange(Math.min(80, rowHeight + 8))} className="p-1 hover:bg-stone-200 rounded text-stone-600 text-xs font-bold">+</button>
+          </div>
+        )}
 
         <button onClick={onCreateEvent} className="ml-2 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-2xl hover:from-emerald-700 hover:to-teal-700 text-sm font-medium flex items-center gap-2">
           <Plus size={16} /> New Event
