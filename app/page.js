@@ -48,6 +48,7 @@ export default function CommandCenter() {
   const [calendarWeekOffset, setCalendarWeekOffset] = useState(0);
   const [showEventForm, setShowEventForm] = useState(false);
   const [calendarLoading, setCalendarLoading] = useState(false);
+  const [connectedAccounts, setConnectedAccounts] = useState([]);
 
   // ── Load data from API on mount ──
   useEffect(() => {
@@ -84,6 +85,7 @@ export default function CommandCenter() {
 
         const session = await api('/api/auth/session');
         setGoogleConnected(session.connected);
+        setConnectedAccounts(session.accounts || []);
 
         if (session.connected) {
           // Load calendar list
@@ -513,31 +515,43 @@ export default function CommandCenter() {
                 Connect Google Calendar
               </a>
             ) : (
-              <div className="text-xs text-emerald-600 px-3 py-1 flex items-center gap-1">
-                <CheckCircle2 size={12} /> Google Calendar connected
+              <div className="space-y-1">
+                {connectedAccounts.map(acct => (
+                  <div key={acct.email} className="text-xs text-emerald-600 px-3 py-1 flex items-center gap-1">
+                    <CheckCircle2 size={12} /> {acct.email}
+                  </div>
+                ))}
+                <a href="/api/auth/login" className="text-xs text-sky-600 px-3 py-1 flex items-center gap-1 hover:bg-stone-50 rounded-lg cursor-pointer">
+                  <Plus size={12} /> Add another account
+                </a>
               </div>
             )}
 
             {/* Calendar selector */}
             {googleConnected && calendarList.length > 0 && activeView === 'calendar' && (
-              <div className="space-y-1 pl-1">
-                {calendarList.map(cal => (
-                  <label key={cal.id} className="flex items-center gap-2 text-xs text-stone-600 cursor-pointer px-2 py-1 rounded-lg hover:bg-stone-50">
-                    <input
-                      type="checkbox"
-                      checked={selectedCalendars.includes(cal.id)}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedCalendars([...selectedCalendars, cal.id]);
-                        } else {
-                          setSelectedCalendars(selectedCalendars.filter(id => id !== cal.id));
-                        }
-                      }}
-                      className="rounded accent-emerald-600"
-                    />
-                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: cal.color }} />
-                    <span className="truncate">{cal.name}</span>
-                  </label>
+              <div className="space-y-2 pl-1">
+                {connectedAccounts.map(acct => (
+                  <div key={acct.email}>
+                    <div className="text-xs font-semibold text-stone-500 px-2 py-1 uppercase tracking-wide">{acct.email.split('@')[1]}</div>
+                    {calendarList.filter(cal => cal.accountEmail === acct.email).map(cal => (
+                      <label key={cal.id} className="flex items-center gap-2 text-xs text-stone-600 cursor-pointer px-2 py-1 rounded-lg hover:bg-stone-50">
+                        <input
+                          type="checkbox"
+                          checked={selectedCalendars.includes(cal.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedCalendars([...selectedCalendars, cal.id]);
+                            } else {
+                              setSelectedCalendars(selectedCalendars.filter(id => id !== cal.id));
+                            }
+                          }}
+                          className="rounded accent-emerald-600"
+                        />
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: cal.color }} />
+                        <span className="truncate">{cal.name}</span>
+                      </label>
+                    ))}
+                  </div>
                 ))}
               </div>
             )}
@@ -1089,8 +1103,10 @@ function WeeklyCalendar({ events, calendarList, selectedCalendars, weekOffset, o
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const getCalendarColor = (calendarId) => {
-    const cal = calendarList.find(c => c.id === calendarId);
+  const getCalendarColor = (event) => {
+    // Use the color from the event itself (set by the calendar API)
+    if (event.color) return event.color;
+    const cal = calendarList.find(c => c.id === event.calendarId);
     return cal?.color || '#4285f4';
   };
 
@@ -1163,7 +1179,7 @@ function WeeklyCalendar({ events, calendarList, selectedCalendars, weekOffset, o
                 </div>
                 {/* All-day events */}
                 {getAllDayEvents(day).map(event => (
-                  <div key={event.id} className="text-xs px-1 py-0.5 rounded mt-1 truncate text-white font-medium" style={{ backgroundColor: getCalendarColor(event.calendarId) }}>
+                  <div key={event.id} className="text-xs px-1 py-0.5 rounded mt-1 truncate text-white font-medium" style={{ backgroundColor: getCalendarColor(event) }}>
                     {event.title}
                   </div>
                 ))}
@@ -1193,7 +1209,7 @@ function WeeklyCalendar({ events, calendarList, selectedCalendars, weekOffset, o
                           key={event.id}
                           className="absolute left-0.5 right-0.5 rounded-lg px-1.5 py-0.5 text-xs text-white overflow-hidden cursor-pointer hover:opacity-90 shadow-sm"
                           style={{
-                            backgroundColor: getCalendarColor(event.calendarId),
+                            backgroundColor: getCalendarColor(event),
                             top: `${topOffset}px`,
                             height: `${heightPx}px`,
                             minHeight: '24px',
