@@ -50,12 +50,13 @@ export async function GET(request) {
 
         if (res.ok) {
           const data = await res.json();
-          const events = (data.items || []).map(event => ({
+          const events = (data.items || []).filter(event => event.summary).map(event => ({
             id: event.id,
             calendarId: cal.id,
             calendarName: cal.summary,
             accountEmail,
-            title: event.summary || '(No title)',
+           
+title: event.summary || '',
             description: event.description || '',
             start: event.start?.dateTime || event.start?.date,
             end: event.end?.dateTime || event.end?.date,
